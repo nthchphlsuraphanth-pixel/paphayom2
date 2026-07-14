@@ -5,6 +5,9 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { ref, onValue, set } from 'firebase/database'; // นำเข้าเครื่องมือจาก Firebase
+import { db } from './firebase'; // ดึงท่อเชื่อมต่อที่เราสร้างไว้มาใช้
+
 import Header from './components/Header';
 import Footer from './components/Footer';
 import Toast from './components/Toast';
@@ -23,38 +26,53 @@ export default function App() {
     return localStorage.getItem('pitchready_admin_auth') === 'true';
   });
 
-  // --- Core Application State (Persistent via LocalStorage) ---
-  const [players, setPlayers] = useState<Player[]>(() => {
-    const saved = localStorage.getItem('pitchready_players');
-    return saved ? JSON.parse(saved) : INITIAL_PLAYERS;
-  });
-
-  const [pitchInfo, setPitchInfo] = useState<PitchInfo>(() => {
-    const saved = localStorage.getItem('pitchready_pitch_info');
-    return saved ? JSON.parse(saved) : INITIAL_PITCH_INFO;
-  });
-
-  const [sessionConfig, setSessionConfig] = useState<SessionConfig>(() => {
-    const saved = localStorage.getItem('pitchready_session_config');
-    return saved ? JSON.parse(saved) : INITIAL_SESSION_CONFIG;
-  });
+  // --- Core Application State (ซิงค์แบบสด ๆ จากคลาวด์ Firebase) ---
+  const [players, setPlayers] = useState<Player[]>(INITIAL_PLAYERS);
+  const [pitchInfo, setPitchInfo] = useState<PitchInfo>(INITIAL_PITCH_INFO);
+  const [sessionConfig, setSessionConfig] = useState<SessionConfig>(INITIAL_SESSION_CONFIG);
 
   // --- Notifications/Toasts State ---
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error'>('success');
 
-  // --- Sync State to LocalStorage ---
+  // --- ดึงข้อมูลสด ๆ แบบ Real-time จาก Firebase เมื่อมีเครื่องอื่นอัปเดต ---
   useEffect(() => {
-    localStorage.setItem('pitchready_players', JSON.stringify(players));
-  }, [players]);
+    // 1. คอยฟังความเปลี่ยนแปลงของข้อมูลผู้เล่นจองสนาม
+    const playersRef = ref(db, 'pitchready_players');
+    const unsubscribePlayers = onValue(playersRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data !== null) {
+        setPlayers(data);
+      } else {
+        setPlayers([]);
+      }
+    });
 
-  useEffect(() => {
-    localStorage.setItem('pitchready_pitch_info', JSON.stringify(pitchInfo));
-  }, [pitchInfo]);
+    // 2. คอยฟังความเปลี่ยนแปลงของข้อมูลการตั้งค่าสนาม
+    const pitchInfoRef = ref(db, 'pitchready_pitch_info');
+    const unsubscribePitch = onValue(pitchInfoRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data !== null) {
+        setPitchInfo(data);
+      }
+    });
 
-  useEffect(() => {
-    localStorage.setItem('pitchready_session_config', JSON.stringify(sessionConfig));
-  }, [sessionConfig]);
+    // 3. คอยฟังความเปลี่ยนแปลงของรูปแบบข้อมูล Session
+    const sessionConfigRef = ref(db, 'pitchready_session_config');
+    const unsubscribeSession = onValue(sessionConfigRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data !== null) {
+        setSessionConfig(data);
+      }
+    });
+
+    // ปิดการเชื่อมต่อเมื่อปิดหน้าเว็บ
+    return () => {
+      unsubscribePlayers();
+      unsubscribePitch();
+      unsubscribeSession();
+    };
+  }, []);
 
   // --- Helper Routines ---
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -84,9 +102,7 @@ export default function App() {
   };
 
   const addPlayer = (name: string, count: number) => {
-    // Clear the "isNew" flag on previous players first
     const cleanPlayers = players.map(p => ({ ...p, isNew: false }));
-
     const newPlayer: Player = {
       id: String(Date.now()),
       name,
@@ -95,9 +111,9 @@ export default function App() {
       isNew: true,
     };
 
-    // Prepend to array so the newest is index 0 (top of list)
-    setPlayers([newPlayer, ...cleanPlayers]);
-    showToast(`ลงชื่อ "${name}" (${count} คน) เรียบร้อย! ⚽`);
+    const updated = [newPlayer, ...cleanPlayers];
+    set(ref(db, 'pitchready_players'), updated) // บันทึกตรงเข้า Firebase
+      .then(() => showToast(`ลงชื่อ "${name}" (${count} คน) เรียบร้อย! ⚽`));
   };
 
   const addPlayerDirect = (name: string, count: number) => {
@@ -109,38 +125,43 @@ export default function App() {
       time: getFormattedTime(),
       isNew: true,
     };
-    setPlayers([newPlayer, ...cleanPlayers]);
-    showToast(`แอดมินลงชื่อ "${name}" สำเร็จ`);
+    
+    const updated = [newPlayer, ...cleanPlayers];
+    set(ref(db, 'pitchready_players'), updated) // บันทึกตรงเข้า Firebase
+      .then(() => showToast(`แอดมินลงชื่อ "${name}" สำเร็จ`));
   };
 
   const deletePlayer = (id: string) => {
-    setPlayers(players.filter(p => p.id !== id));
+    const updated = players.filter(p => p.id !== id);
+    set(ref(db, 'pitchready_players'), updated); // บันทึกตรงเข้า Firebase
   };
 
   const editPlayer = (id: string, name: string, count: number) => {
-    setPlayers(players.map(p => {
+    const updated = players.map(p => {
       if (p.id === id) {
         return { ...p, name, count };
       }
       return p;
-    }));
+    });
+    set(ref(db, 'pitchready_players'), updated); // บันทึกตรงเข้า Firebase
   };
 
   const resetSession = () => {
-    setPlayers([]);
+    set(ref(db, 'pitchready_players'), []); // สั่งล้างข้อมูลบนคลาวด์ Firebase
   };
 
   const updatePitchInfo = (info: Partial<PitchInfo>) => {
-    setPitchInfo(prev => ({ ...prev, ...info }));
+    const updated = { ...pitchInfo, ...info };
+    set(ref(db, 'pitchready_pitch_info'), updated); // เซฟค่าสนามใหม่เข้า Firebase
   };
 
   const updateSessionConfig = (config: Partial<SessionConfig>) => {
-    setSessionConfig(prev => ({ ...prev, ...config }));
+    const updated = { ...sessionConfig, ...config };
+    set(ref(db, 'pitchready_session_config'), updated); // เซฟตั้งค่าห้องเข้า Firebase
   };
 
   return (
     <div className="min-h-screen flex flex-col bg-brand-surface font-sans antialiased text-[#0b1c30]">
-      {/* Sticky Top Header */}
       <Header 
         currentScreen={currentScreen}
         setScreen={setScreen}
@@ -149,7 +170,6 @@ export default function App() {
         showToast={showToast}
       />
 
-      {/* Main Container Stage */}
       <main className="flex-grow w-full max-w-[1200px] mx-auto px-4 md:px-8 py-8">
         <AnimatePresence mode="wait">
           {currentScreen === 'user' && (
@@ -223,10 +243,8 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* Persistent Footer */}
       <Footer />
 
-      {/* Global Interactive Notification Toast */}
       <Toast 
         message={toastMessage}
         type={toastType}
@@ -235,4 +253,3 @@ export default function App() {
     </div>
   );
 }
-
