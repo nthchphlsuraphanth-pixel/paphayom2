@@ -1,0 +1,6 @@
+{
+  "name": "PitchReady",
+  "description": "An online platform for amateur football players to sign up, check remaining spots, and manage match sessions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
